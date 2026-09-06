@@ -1,5 +1,5 @@
 package link
 
 type Link interface {
-	Chat(input string) string
+	Chat(input string, model string) ([]byte, error)
 }
