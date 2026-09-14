@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
@@ -19,25 +20,44 @@ func New(apiKey string) *DeepSeek {
 	}
 }
 
-func (d *DeepSeek) Chat(input string, model string) ([]byte, error) {
-	content, err := json.Marshal(input)
-	if err != nil {
-		return nil, err
-	}
-	modelJSON, err := json.Marshal(model)
-	if err != nil {
-		return nil, err
+func (d *DeepSeek) BuildRequest(
+	req requestprotocol.Request,
+) ([]byte, error) {
+	type deepSeekMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
 	}
 
-	jsonData := []byte(`{
-		"model": ` + string(modelJSON) + `,
-		"messages": [
-			{
-				"role": "user",
-				"content": ` + string(content) + `
-			}
-		]
-	}`)
+	requestData := struct {
+		Model       string            `json:"model"`
+		Messages    []deepSeekMessage `json:"messages"`
+		Temperature *float64          `json:"temperature,omitempty"`
+		TopP        *float64          `json:"top_p,omitempty"`
+		MaxTokens   *int              `json:"max_tokens,omitempty"`
+		Stream      bool              `json:"stream,omitempty"`
+		Stop        []string          `json:"stop,omitempty"`
+	}{
+		Model:       req.Model,
+		Messages:    make([]deepSeekMessage, len(req.Messages)),
+		Temperature: req.Temperature,
+		TopP:        req.TopP,
+		MaxTokens:   req.MaxTokens,
+		Stream:      req.Stream,
+		Stop:        req.Stop,
+	}
+
+	for i, message := range req.Messages {
+		requestData.Messages[i] = deepSeekMessage{
+			Role:    message.Role,
+			Content: message.Content,
+		}
+	}
+
+	return json.Marshal(requestData)
+}
+
+func (d *DeepSeek) Chat(request requestprotocol.Request) ([]byte, error) {
+	jsonData, err := d.BuildRequest(request)
 	factory := &tool.HttpFactory{}
 	factory.Set(
 		"https://api.deepseek.com/chat/completions",

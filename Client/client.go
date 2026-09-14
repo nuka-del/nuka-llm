@@ -5,6 +5,7 @@ import (
 
 	link "github.com/nuka-del/nuka-llm/Link"
 	deepseek "github.com/nuka-del/nuka-llm/Link/series/DeepSeek"
+	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	toolprotocol "github.com/nuka-del/nuka-llm/Protocol/Tool_Protocol"
 )
 
@@ -26,8 +27,8 @@ func New(series string, apiKey string) (*Client, error) {
 		tools: toolprotocol.New(),
 	}, nil
 }
-func (c *Client) Chat(input string, model string) ([]byte, error) {
-	return c.link.Chat(input, model)
+func (c *Client) Chat(r requestprotocol.Request) ([]byte, error) {
+	return c.link.Chat(r)
 }
 
 func (c *Client) RegisterTool(t toolprotocol.Tool) {
