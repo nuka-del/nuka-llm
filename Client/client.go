@@ -1,7 +1,9 @@
 package client
 
 import (
+	"context"
 	"errors"
+	"time"
 
 	link "github.com/nuka-del/nuka-llm/Link"
 	deepseek "github.com/nuka-del/nuka-llm/Link/series/DeepSeek"
@@ -27,8 +29,15 @@ func New(series string, apiKey string) (*Client, error) {
 		tools: toolprotocol.New(),
 	}, nil
 }
-func (c *Client) Chat(r requestprotocol.Request) ([]byte, error) {
-	return c.link.Chat(r)
+func (c *Client) Chat(ctx context.Context, r requestprotocol.Request) ([]byte, error) {
+	return c.link.Chat(ctx, r)
+}
+func (c *Client) ChatWithContext(r requestprotocol.Request) ([]byte, error) {
+	requestContext, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second)
+	defer cancel()
+	return c.link.Chat(requestContext, r)
 }
 
 func (c *Client) RegisterTool(t toolprotocol.Tool) {

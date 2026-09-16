@@ -1,10 +1,12 @@
 package deepseek
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
@@ -56,8 +58,19 @@ func (d *DeepSeek) BuildRequest(
 	return json.Marshal(requestData)
 }
 
-func (d *DeepSeek) Chat(request requestprotocol.Request) ([]byte, error) {
+func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(
+			ctx,
+			time.Second*5,
+		)
+		defer cancel()
+	}
 	jsonData, err := d.BuildRequest(request)
+	if err != nil {
+		return nil, err
+	}
 	factory := &tool.HttpFactory{}
 	factory.Set(
 		"https://api.deepseek.com/chat/completions",
@@ -69,6 +82,7 @@ func (d *DeepSeek) Chat(request requestprotocol.Request) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	req = req.WithContext(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
