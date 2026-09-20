@@ -1,4 +1,4 @@
-package deepseek
+package alibaba
 
 import (
 	"context"
@@ -12,46 +12,45 @@ import (
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
-type DeepSeek struct {
+type Qwen struct {
 	apiKey string
 }
 
-func New(apiKey string) *DeepSeek {
-	return &DeepSeek{
-		apiKey: apiKey,
+func New(Apikey string) *Qwen {
+	return &Qwen{
+		apiKey: Apikey,
 	}
 }
 
-func (d *DeepSeek) BuildRequest(
+func (d *Qwen) BuildRequest(
 	req requestprotocol.Request,
 ) ([]byte, error) {
-
 	if req.Model == "" {
 		return nil, fmt.Errorf(
-			"deepseek:model is required",
+			"qwen:model is required",
 		)
 	}
 	if len(req.Messages) == 0 {
 		return nil, fmt.Errorf(
-			"deepseek: at least one message is required",
+			"qwen: at least one message is required",
 		)
 	}
-	type deepSeekMessage struct {
+	type QwenMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
 
 	requestData := struct {
-		Model       string            `json:"model"`
-		Messages    []deepSeekMessage `json:"messages"`
-		Temperature *float64          `json:"temperature,omitempty"`
-		TopP        *float64          `json:"top_p,omitempty"`
-		MaxTokens   *int              `json:"max_tokens,omitempty"`
-		Stream      bool              `json:"stream,omitempty"`
-		Stop        []string          `json:"stop,omitempty"`
+		Model       string        `json:"model"`
+		Messages    []QwenMessage `json:"messages"`
+		Temperature *float64      `json:"temperature,omitempty"`
+		TopP        *float64      `json:"top_p,omitempty"`
+		MaxTokens   *int          `json:"max_tokens,omitempty"`
+		Stream      bool          `json:"stream,omitempty"`
+		Stop        []string      `json:"stop,omitempty"`
 	}{
 		Model:       req.Model,
-		Messages:    make([]deepSeekMessage, len(req.Messages)),
+		Messages:    make([]QwenMessage, len(req.Messages)),
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
@@ -60,7 +59,7 @@ func (d *DeepSeek) BuildRequest(
 	}
 
 	for i, message := range req.Messages {
-		requestData.Messages[i] = deepSeekMessage{
+		requestData.Messages[i] = QwenMessage{
 			Role:    message.Role,
 			Content: message.Content,
 		}
@@ -68,8 +67,7 @@ func (d *DeepSeek) BuildRequest(
 
 	return json.Marshal(requestData)
 }
-
-func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+func (q *Qwen) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(
@@ -78,14 +76,14 @@ func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([
 		)
 		defer cancel()
 	}
-	jsonData, err := d.BuildRequest(request)
+	jsonData, err := q.BuildRequest(request)
 	if err != nil {
 		return nil, err
 	}
 	factory := &tool.HttpFactory{}
 	factory.Set(
-		"https://api.deepseek.com/chat/completions",
-		d.apiKey,
+		"https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+		q.apiKey,
 	)
 
 	req, err := factory.Create(jsonData)
@@ -109,7 +107,7 @@ func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([
 	if resp.StatusCode < http.StatusOK ||
 		resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, fmt.Errorf(
-			"deepseek api error: status=%s, body=%s",
+			"qwen api error: status=%s, body=%s",
 			resp.Status,
 			string(result),
 		)
