@@ -8,12 +8,10 @@ import (
 	link "github.com/nuka-del/nuka-llm/Link"
 	deepseek "github.com/nuka-del/nuka-llm/Link/series/DeepSeek"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
-	toolprotocol "github.com/nuka-del/nuka-llm/Protocol/Tool_Protocol"
 )
 
 type Client struct {
-	link  link.Link
-	tools *toolprotocol.ToolList
+	link link.Link
 }
 
 func New(series string, apiKey string) (*Client, error) {
@@ -25,8 +23,7 @@ func New(series string, apiKey string) (*Client, error) {
 		return nil, errors.New("unsupported series")
 	}
 	return &Client{
-		link:  link,
-		tools: toolprotocol.New(),
+		link: link,
 	}, nil
 }
 func (c *Client) Chat(ctx context.Context, r requestprotocol.Request) ([]byte, error) {
@@ -38,11 +35,4 @@ func (c *Client) ChatWithContext(r requestprotocol.Request) ([]byte, error) {
 		5*time.Second)
 	defer cancel()
 	return c.link.Chat(requestContext, r)
-}
-
-func (c *Client) RegisterTool(t toolprotocol.Tool) {
-	c.tools.Add(t)
-}
-func (c *Client) ToolDefinitions() ([]byte, error) {
-	return c.tools.Definitions()
 }

@@ -1,18 +1,22 @@
 package toolprotocol
 
-type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+type Tool struct {
+	ToolType string
+	Function Function
 }
 
-func NewToolInfo(name string, description string) ToolInfo {
-	return ToolInfo{
-		Name:        name,
-		Description: description,
-	}
+type Function struct {
+	Name        string
+	Description string
+	Parameters  Parameters
 }
 
-type Tool interface {
-	Info() ToolInfo
-	Start() (string, error)
+type Parameters struct {
+	ParaType   string
+	Properties map[string]Property
+	Required   []string
+}
+
+type Property struct {
+	PropertiesType string
 }

@@ -12,10 +12,10 @@ type Message struct {
 type Request struct {
 	Model       string
 	Messages    []Message
-	Tools       tools.ToolList
 	Temperature *float64
 	TopP        *float64
 	MaxTokens   *int
 	Stream      bool
 	Stop        []string
+	Tools       tools.Tools
 }
