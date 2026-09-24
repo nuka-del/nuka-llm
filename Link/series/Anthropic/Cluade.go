@@ -40,6 +40,10 @@ func (c *Cluade) BuildRequest(
 			"cluade: at least one message is required",
 		)
 	}
+	if req.MaxTokens == nil {
+		return nil, fmt.Errorf("cluade: max_tokens is required")
+	}
+
 	var system string
 	messages := make([]requestprotocol.Message, 0, len(req.Messages))
 
@@ -59,6 +63,20 @@ func (c *Cluade) BuildRequest(
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
+	type CluadeProperty struct {
+		Type        string `json:"type"`
+		Description string `json:"description,omitempty"`
+	}
+	type CluadeInputSchema struct {
+		Type       string   `json:"type"`
+		Properties any      `json:"properties,omitempty"`
+		Required   []string `json:"required,omitempty"`
+	}
+	type CluadeTool struct {
+		Name        string            `json:"name"`
+		Description string            `json:"description,omitempty"`
+		InputSchema CluadeInputSchema `json:"input_schema"`
+	}
 
 	requestData := struct {
 		Model       string          `json:"model"`
@@ -66,9 +84,10 @@ func (c *Cluade) BuildRequest(
 		Messages    []CluadeMessage `json:"messages"`
 		Temperature *float64        `json:"temperature,omitempty"`
 		TopP        *float64        `json:"top_p,omitempty"`
-		MaxTokens   *int            `json:"max_tokens,omitempty"`
+		MaxTokens   *int            `json:"max_tokens"`
 		Stream      bool            `json:"stream,omitempty"`
-		Stop        []string        `json:"stop,omitempty"`
+		Stop        []string        `json:"stop_sequences,omitempty"`
+		Tools       []CluadeTool    `json:"tools,omitempty"`
 	}{
 		Model:       req.Model,
 		System:      system,
@@ -78,6 +97,7 @@ func (c *Cluade) BuildRequest(
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 		Stop:        req.Stop,
+		Tools:       make([]CluadeTool, len(req.Tools.ToolList)),
 	}
 
 	for i, message := range messages {
@@ -86,6 +106,38 @@ func (c *Cluade) BuildRequest(
 			Content: message.Content,
 		}
 	}
+
+	for i, inputTool := range req.Tools.ToolList {
+		inputParameters := inputTool.Function.Parameters
+
+		var properties any
+		if inputParameters.SimpleProperties != nil {
+			simpleProperties := make(
+				map[string]CluadeProperty,
+				len(inputParameters.SimpleProperties),
+			)
+			for name, property := range inputParameters.SimpleProperties {
+				simpleProperties[name] = CluadeProperty{
+					Type:        property.PropertiesType,
+					Description: property.Description,
+				}
+			}
+			properties = simpleProperties
+		} else if inputParameters.ConplexProproties != nil {
+			properties = inputParameters.ConplexProproties
+		}
+
+		requestData.Tools[i] = CluadeTool{
+			Name:        inputTool.Function.Name,
+			Description: inputTool.Function.Description,
+			InputSchema: CluadeInputSchema{
+				Type:       inputParameters.ParaType,
+				Properties: properties,
+				Required:   inputParameters.Required,
+			},
+		}
+	}
+
 	if len(requestData.Messages) == 0 {
 		return nil, fmt.Errorf(
 			"cluade: at least one user or assistant message is required",

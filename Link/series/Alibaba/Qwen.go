@@ -39,6 +39,24 @@ func (d *Qwen) BuildRequest(
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
+	type QwenProperty struct {
+		Type        string `json:"type"`
+		Description string `json:"description,omitempty"`
+	}
+	type QwenParameters struct {
+		Type       string   `json:"type"`
+		Properties any      `json:"properties,omitempty"`
+		Required   []string `json:"required,omitempty"`
+	}
+	type QwenFunction struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description,omitempty"`
+		Parameters  QwenParameters `json:"parameters"`
+	}
+	type QwenTool struct {
+		Type     string       `json:"type"`
+		Function QwenFunction `json:"function"`
+	}
 
 	requestData := struct {
 		Model       string        `json:"model"`
@@ -48,6 +66,7 @@ func (d *Qwen) BuildRequest(
 		MaxTokens   *int          `json:"max_tokens,omitempty"`
 		Stream      bool          `json:"stream,omitempty"`
 		Stop        []string      `json:"stop,omitempty"`
+		Tools       []QwenTool    `json:"tools,omitempty"`
 	}{
 		Model:       req.Model,
 		Messages:    make([]QwenMessage, len(req.Messages)),
@@ -56,12 +75,47 @@ func (d *Qwen) BuildRequest(
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 		Stop:        req.Stop,
+		Tools:       make([]QwenTool, len(req.Tools.ToolList)),
 	}
 
 	for i, message := range req.Messages {
 		requestData.Messages[i] = QwenMessage{
 			Role:    message.Role,
 			Content: message.Content,
+		}
+	}
+
+	for i, inputTool := range req.Tools.ToolList {
+		inputParameters := inputTool.Function.Parameters
+
+		var properties any
+		if inputParameters.SimpleProperties != nil {
+			simpleProperties := make(
+				map[string]QwenProperty,
+				len(inputParameters.SimpleProperties),
+			)
+			for name, property := range inputParameters.SimpleProperties {
+				simpleProperties[name] = QwenProperty{
+					Type:        property.PropertiesType,
+					Description: property.Description,
+				}
+			}
+			properties = simpleProperties
+		} else if inputParameters.ConplexProproties != nil {
+			properties = inputParameters.ConplexProproties
+		}
+
+		requestData.Tools[i] = QwenTool{
+			Type: inputTool.ToolType,
+			Function: QwenFunction{
+				Name:        inputTool.Function.Name,
+				Description: inputTool.Function.Description,
+				Parameters: QwenParameters{
+					Type:       inputParameters.ParaType,
+					Properties: properties,
+					Required:   inputParameters.Required,
+				},
+			},
 		}
 	}
 

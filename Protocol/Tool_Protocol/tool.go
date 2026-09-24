@@ -13,10 +13,12 @@ type Function struct {
 
 type Parameters struct {
 	ParaType   string
-	Properties map[string]Property
+	SimpleProperties map[string]Property
+	ConplexProproties map[string]any
 	Required   []string
 }
 
 type Property struct {
 	PropertiesType string
+	Description string
 }

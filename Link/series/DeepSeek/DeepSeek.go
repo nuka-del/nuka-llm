@@ -40,6 +40,24 @@ func (d *DeepSeek) BuildRequest(
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
+	type deepSeekProperty struct {
+		Type        string `json:"type"`
+		Description string `json:"description,omitempty"`
+	}
+	type deepSeekParameters struct {
+		Type       string   `json:"type"`
+		Properties any      `json:"properties,omitempty"`
+		Required   []string `json:"required,omitempty"`
+	}
+	type deepSeekFunction struct {
+		Name        string             `json:"name"`
+		Description string             `json:"description,omitempty"`
+		Parameters  deepSeekParameters `json:"parameters"`
+	}
+	type deepSeekTool struct {
+		Type     string           `json:"type"`
+		Function deepSeekFunction `json:"function"`
+	}
 
 	requestData := struct {
 		Model       string            `json:"model"`
@@ -49,6 +67,7 @@ func (d *DeepSeek) BuildRequest(
 		MaxTokens   *int              `json:"max_tokens,omitempty"`
 		Stream      bool              `json:"stream,omitempty"`
 		Stop        []string          `json:"stop,omitempty"`
+		Tools       []deepSeekTool    `json:"tools,omitempty"`
 	}{
 		Model:       req.Model,
 		Messages:    make([]deepSeekMessage, len(req.Messages)),
@@ -57,12 +76,47 @@ func (d *DeepSeek) BuildRequest(
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 		Stop:        req.Stop,
+		Tools:       make([]deepSeekTool, len(req.Tools.ToolList)),
 	}
 
 	for i, message := range req.Messages {
 		requestData.Messages[i] = deepSeekMessage{
 			Role:    message.Role,
 			Content: message.Content,
+		}
+	}
+
+	for i, inputTool := range req.Tools.ToolList {
+		inputParameters := inputTool.Function.Parameters
+
+		var properties any
+		if inputParameters.SimpleProperties != nil {
+			simpleProperties := make(
+				map[string]deepSeekProperty,
+				len(inputParameters.SimpleProperties),
+			)
+			for name, property := range inputParameters.SimpleProperties {
+				simpleProperties[name] = deepSeekProperty{
+					Type:        property.PropertiesType,
+					Description: property.Description,
+				}
+			}
+			properties = simpleProperties
+		} else if inputParameters.ConplexProproties != nil {
+			properties = inputParameters.ConplexProproties
+		}
+
+		requestData.Tools[i] = deepSeekTool{
+			Type: inputTool.ToolType,
+			Function: deepSeekFunction{
+				Name:        inputTool.Function.Name,
+				Description: inputTool.Function.Description,
+				Parameters: deepSeekParameters{
+					Type:       inputParameters.ParaType,
+					Properties: properties,
+					Required:   inputParameters.Required,
+				},
+			},
 		}
 	}
 

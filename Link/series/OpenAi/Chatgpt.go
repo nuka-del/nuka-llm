@@ -26,18 +26,33 @@ func (d *Chatgpt) BuildRequest(
 	req requestprotocol.Request,
 ) ([]byte, error) {
 	if req.Model == "" {
-		return nil, fmt.Errorf(
-			"chatgpt:model is required",
-		)
+		return nil, fmt.Errorf("chatgpt:model is required")
 	}
 	if len(req.Messages) == 0 {
-		return nil, fmt.Errorf(
-			"chatgpt: at least one message is required",
-		)
+		return nil, fmt.Errorf("chatgpt: at least one message is required")
 	}
+
 	type ChatgptMessage struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
+	}
+	type ChatgptProperty struct {
+		Type        string `json:"type"`
+		Description string `json:"description,omitempty"`
+	}
+	type ChatgptParameters struct {
+		Type       string   `json:"type"`
+		Properties any      `json:"properties,omitempty"`
+		Required   []string `json:"required,omitempty"`
+	}
+	type ChatgptFunction struct {
+		Name        string            `json:"name"`
+		Description string            `json:"description,omitempty"`
+		Parameters  ChatgptParameters `json:"parameters"`
+	}
+	type ChatgptTool struct {
+		Type     string          `json:"type"`
+		Function ChatgptFunction `json:"function"`
 	}
 
 	requestData := struct {
@@ -48,6 +63,7 @@ func (d *Chatgpt) BuildRequest(
 		MaxTokens   *int             `json:"max_tokens,omitempty"`
 		Stream      bool             `json:"stream,omitempty"`
 		Stop        []string         `json:"stop,omitempty"`
+		Tools       []ChatgptTool    `json:"tools,omitempty"`
 	}{
 		Model:       req.Model,
 		Messages:    make([]ChatgptMessage, len(req.Messages)),
@@ -56,12 +72,47 @@ func (d *Chatgpt) BuildRequest(
 		MaxTokens:   req.MaxTokens,
 		Stream:      req.Stream,
 		Stop:        req.Stop,
+		Tools:       make([]ChatgptTool, len(req.Tools.ToolList)),
 	}
 
 	for i, message := range req.Messages {
 		requestData.Messages[i] = ChatgptMessage{
 			Role:    message.Role,
 			Content: message.Content,
+		}
+	}
+
+	for i, inputTool := range req.Tools.ToolList {
+		inputParameters := inputTool.Function.Parameters
+
+		var properties any
+		if inputParameters.SimpleProperties != nil {
+			simpleProperties := make(
+				map[string]ChatgptProperty,
+				len(inputParameters.SimpleProperties),
+			)
+			for name, property := range inputParameters.SimpleProperties {
+				simpleProperties[name] = ChatgptProperty{
+					Type:        property.PropertiesType,
+					Description: property.Description,
+				}
+			}
+			properties = simpleProperties
+		} else if inputParameters.ConplexProproties != nil {
+			properties = inputParameters.ConplexProproties
+		}
+
+		requestData.Tools[i] = ChatgptTool{
+			Type: inputTool.ToolType,
+			Function: ChatgptFunction{
+				Name:        inputTool.Function.Name,
+				Description: inputTool.Function.Description,
+				Parameters: ChatgptParameters{
+					Type:       inputParameters.ParaType,
+					Properties: properties,
+					Required:   inputParameters.Required,
+				},
+			},
 		}
 	}
 
