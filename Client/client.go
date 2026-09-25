@@ -2,11 +2,14 @@ package client
 
 import (
 	"context"
-	"errors"
 	"time"
 
+	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	link "github.com/nuka-del/nuka-llm/Link"
+	alibaba "github.com/nuka-del/nuka-llm/Link/series/Alibaba"
+	anthropic "github.com/nuka-del/nuka-llm/Link/series/Anthropic"
 	deepseek "github.com/nuka-del/nuka-llm/Link/series/DeepSeek"
+	openai "github.com/nuka-del/nuka-llm/Link/series/OpenAi"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 )
 
@@ -19,8 +22,18 @@ func New(series string, apiKey string) (*Client, error) {
 	switch series {
 	case "deepseek":
 		link = deepseek.New(apiKey)
+	case "chatgpt":
+		link = openai.New(apiKey)
+	case "qwen":
+		link = alibaba.New(apiKey)
+	case "cluade":
+		link = anthropic.New(apiKey)
 	default:
-		return nil, errors.New("unsupported series")
+		return nil, &sdkerror.SDKError{
+			Provider: series,
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "unsupported provider",
+		}
 	}
 	return &Client{
 		link: link,

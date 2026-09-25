@@ -3,11 +3,11 @@ package alibaba
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
@@ -26,14 +26,18 @@ func (d *Qwen) BuildRequest(
 	req requestprotocol.Request,
 ) ([]byte, error) {
 	if req.Model == "" {
-		return nil, fmt.Errorf(
-			"qwen:model is required",
-		)
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "model is required",
+		}
 	}
 	if len(req.Messages) == 0 {
-		return nil, fmt.Errorf(
-			"qwen: at least one message is required",
-		)
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "at least one message is required",
+		}
 	}
 	type QwenMessage struct {
 		Role    string `json:"role"`
@@ -119,7 +123,16 @@ func (d *Qwen) BuildRequest(
 		}
 	}
 
-	return json.Marshal(requestData)
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "marshal request failed",
+			Cause:    err,
+		}
+	}
+	return jsonData, nil
 }
 func (q *Qwen) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -143,28 +156,45 @@ func (q *Qwen) Chat(ctx context.Context, request requestprotocol.Request) ([]byt
 	req, err := factory.Create(jsonData)
 
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "create HTTP request failed",
+			Cause:    err,
+		}
 	}
 	req = req.WithContext(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.Transport,
+			Message:  "send HTTP request failed",
+			Cause:    err,
+		}
 	}
 	defer resp.Body.Close()
 
 	result, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.Transport,
+			Message:  "read response body failed",
+			Cause:    err,
+		}
 	}
 
 	if resp.StatusCode < http.StatusOK ||
 		resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf(
-			"qwen api error: status=%s, body=%s",
-			resp.Status,
-			string(result),
-		)
+		return nil, &sdkerror.SDKError{
+			Provider:   "qwen",
+			Kind:       sdkerror.API,
+			StatusCode: resp.StatusCode,
+			Message:    "request returned unsuccessful status",
+			Body:       string(result),
+		}
 	}
 
 	return result, nil

@@ -3,11 +3,11 @@ package deepseek
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
@@ -27,14 +27,18 @@ func (d *DeepSeek) BuildRequest(
 ) ([]byte, error) {
 
 	if req.Model == "" {
-		return nil, fmt.Errorf(
-			"deepseek:model is required",
-		)
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "model is required",
+		}
 	}
 	if len(req.Messages) == 0 {
-		return nil, fmt.Errorf(
-			"deepseek: at least one message is required",
-		)
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "at least one message is required",
+		}
 	}
 	type deepSeekMessage struct {
 		Role    string `json:"role"`
@@ -120,7 +124,16 @@ func (d *DeepSeek) BuildRequest(
 		}
 	}
 
-	return json.Marshal(requestData)
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "marshal request failed",
+			Cause:    err,
+		}
+	}
+	return jsonData, nil
 }
 
 func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
@@ -145,28 +158,45 @@ func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([
 	req, err := factory.Create(jsonData)
 
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "create HTTP request failed",
+			Cause:    err,
+		}
 	}
 	req = req.WithContext(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.Transport,
+			Message:  "send HTTP request failed",
+			Cause:    err,
+		}
 	}
 	defer resp.Body.Close()
 
 	result, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.Transport,
+			Message:  "read response body failed",
+			Cause:    err,
+		}
 	}
 
 	if resp.StatusCode < http.StatusOK ||
 		resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf(
-			"deepseek api error: status=%s, body=%s",
-			resp.Status,
-			string(result),
-		)
+		return nil, &sdkerror.SDKError{
+			Provider:   "deepseek",
+			Kind:       sdkerror.API,
+			StatusCode: resp.StatusCode,
+			Message:    "request returned unsuccessful status",
+			Body:       string(result),
+		}
 	}
 
 	return result, nil

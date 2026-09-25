@@ -3,11 +3,11 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
@@ -26,10 +26,18 @@ func (d *Chatgpt) BuildRequest(
 	req requestprotocol.Request,
 ) ([]byte, error) {
 	if req.Model == "" {
-		return nil, fmt.Errorf("chatgpt:model is required")
+		return nil, &sdkerror.SDKError{
+			Provider: "openai",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "model is required",
+		}
 	}
 	if len(req.Messages) == 0 {
-		return nil, fmt.Errorf("chatgpt: at least one message is required")
+		return nil, &sdkerror.SDKError{
+			Provider: "openai",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "at least one message is required",
+		}
 	}
 
 	type ChatgptMessage struct {
@@ -116,7 +124,16 @@ func (d *Chatgpt) BuildRequest(
 		}
 	}
 
-	return json.Marshal(requestData)
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "openai",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "marshal request failed",
+			Cause:    err,
+		}
+	}
+	return jsonData, nil
 }
 func (c *Chatgpt) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -140,28 +157,45 @@ func (c *Chatgpt) Chat(ctx context.Context, request requestprotocol.Request) ([]
 	req, err := factory.Create(jsonData)
 
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "openai",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "create HTTP request failed",
+			Cause:    err,
+		}
 	}
 	req = req.WithContext(ctx)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "openai",
+			Kind:     sdkerror.Transport,
+			Message:  "send HTTP request failed",
+			Cause:    err,
+		}
 	}
 	defer resp.Body.Close()
 
 	result, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, &sdkerror.SDKError{
+			Provider: "openai",
+			Kind:     sdkerror.Transport,
+			Message:  "read response body failed",
+			Cause:    err,
+		}
 	}
 
 	if resp.StatusCode < http.StatusOK ||
 		resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf(
-			"chatgpt api error: status=%s, body=%s",
-			resp.Status,
-			string(result),
-		)
+		return nil, &sdkerror.SDKError{
+			Provider:   "openai",
+			Kind:       sdkerror.API,
+			StatusCode: resp.StatusCode,
+			Message:    "request returned unsuccessful status",
+			Body:       string(result),
+		}
 	}
 
 	return result, nil
