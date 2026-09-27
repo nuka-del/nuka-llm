@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"time"
 
 	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	link "github.com/nuka-del/nuka-llm/Link"
@@ -11,23 +10,30 @@ import (
 	deepseek "github.com/nuka-del/nuka-llm/Link/series/DeepSeek"
 	openai "github.com/nuka-del/nuka-llm/Link/series/OpenAi"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
+	responseprotocol "github.com/nuka-del/nuka-llm/Protocol/Response_Protocol"
 )
 
 type Client struct {
-	link link.Link
+	link    link.Link
+	options link.Options
 }
 
 func New(series string, apiKey string) (*Client, error) {
-	var link link.Link
+	return NewWithOptions(series, apiKey, link.DefaultOptions())
+}
+
+func NewWithOptions(series string, apiKey string, options link.Options) (*Client, error) {
+	options = options.WithDefaults()
+	var providerLink link.Link
 	switch series {
 	case "deepseek":
-		link = deepseek.New(apiKey)
+		providerLink = deepseek.NewWithOptions(apiKey, options)
 	case "chatgpt":
-		link = openai.New(apiKey)
+		providerLink = openai.NewWithOptions(apiKey, options)
 	case "qwen":
-		link = alibaba.New(apiKey)
+		providerLink = alibaba.NewWithOptions(apiKey, options)
 	case "cluade":
-		link = anthropic.New(apiKey)
+		providerLink = anthropic.NewWithOptions(apiKey, options)
 	default:
 		return nil, &sdkerror.SDKError{
 			Provider: series,
@@ -36,16 +42,24 @@ func New(series string, apiKey string) (*Client, error) {
 		}
 	}
 	return &Client{
-		link: link,
+		link:    providerLink,
+		options: options,
 	}, nil
 }
-func (c *Client) Chat(ctx context.Context, r requestprotocol.Request) ([]byte, error) {
-	return c.link.Chat(ctx, r)
+func (c *Client) Chat(ctx context.Context, r requestprotocol.Request) (responseprotocol.Response, error) {
+	raw, err := c.ChatRaw(ctx, r)
+	if err != nil {
+		return responseprotocol.Response{}, err
+	}
+	return c.link.DecodeResponse(raw)
 }
-func (c *Client) ChatWithContext(r requestprotocol.Request) ([]byte, error) {
+func (c *Client) ChatRaw(ctx context.Context, r requestprotocol.Request) ([]byte, error) {
+	return c.link.ChatRaw(ctx, r)
+}
+func (c *Client) ChatWithContext(r requestprotocol.Request) (responseprotocol.Response, error) {
 	requestContext, cancel := context.WithTimeout(
 		context.Background(),
-		5*time.Second)
+		c.options.Timeout)
 	defer cancel()
-	return c.link.Chat(requestContext, r)
+	return c.Chat(requestContext, r)
 }

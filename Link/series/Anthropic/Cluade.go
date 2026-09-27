@@ -5,16 +5,19 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"time"
+	"strings"
 
 	sdkerror "github.com/nuka-del/nuka-llm/Error"
+	link "github.com/nuka-del/nuka-llm/Link"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
+	responseprotocol "github.com/nuka-del/nuka-llm/Protocol/Response_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
 type Cluade struct {
 	apiKey  string
 	version string
+	options link.Options
 }
 
 func (c *Cluade) ChangeVersion(v string) {
@@ -22,8 +25,13 @@ func (c *Cluade) ChangeVersion(v string) {
 }
 
 func New(Apikey string) *Cluade {
+	return NewWithOptions(Apikey, link.DefaultOptions())
+}
+
+func NewWithOptions(apiKey string, options link.Options) *Cluade {
 	return &Cluade{
-		apiKey: Apikey,
+		apiKey:  apiKey,
+		options: options.WithDefaults(),
 	}
 }
 
@@ -165,12 +173,12 @@ func (c *Cluade) BuildRequest(
 	}
 	return jsonData, nil
 }
-func (c *Cluade) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+func (c *Cluade) ChatRaw(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && c.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(
 			ctx,
-			time.Second*5,
+			c.options.Timeout,
 		)
 		defer cancel()
 	}
@@ -202,7 +210,7 @@ func (c *Cluade) Chat(ctx context.Context, request requestprotocol.Request) ([]b
 
 	req = req.WithContext(ctx)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.options.HTTPClient.Do(req)
 	if err != nil {
 		return nil, &sdkerror.SDKError{
 			Provider: "anthropic",
@@ -236,4 +244,76 @@ func (c *Cluade) Chat(ctx context.Context, request requestprotocol.Request) ([]b
 
 	return result, nil
 
+}
+
+func (c *Cluade) DecodeResponse(raw []byte) (responseprotocol.Response, error) {
+	type messageResponse struct {
+		ID      string `json:"id"`
+		Role    string `json:"role"`
+		Model   string `json:"model"`
+		Content []struct {
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			ID    string          `json:"id"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
+		} `json:"content"`
+		StopReason string `json:"stop_reason"`
+		Usage      *struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+
+	var decoded messageResponse
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.Decode,
+			Message:  "decode response failed",
+			Cause:    err,
+		}
+	}
+
+	var content strings.Builder
+	message := responseprotocol.Message{Role: decoded.Role}
+	for _, block := range decoded.Content {
+		switch block.Type {
+		case "text":
+			content.WriteString(block.Text)
+		case "tool_use":
+			message.ToolCalls = append(message.ToolCalls, responseprotocol.ToolCall{
+				ID:   block.ID,
+				Type: "function",
+				Function: responseprotocol.FunctionCall{
+					Name:      block.Name,
+					Arguments: append(json.RawMessage(nil), block.Input...),
+				},
+			})
+		}
+	}
+	message.Content = content.String()
+
+	response := responseprotocol.Response{
+		Provider: "anthropic",
+		ID:       decoded.ID,
+		Model:    decoded.Model,
+		Choices: []responseprotocol.Choice{
+			{
+				Index:        0,
+				Message:      message,
+				FinishReason: decoded.StopReason,
+			},
+		},
+		Raw: append(json.RawMessage(nil), raw...),
+	}
+	if decoded.Usage != nil {
+		response.Usage = &responseprotocol.Usage{
+			InputTokens:  decoded.Usage.InputTokens,
+			OutputTokens: decoded.Usage.OutputTokens,
+			TotalTokens:  decoded.Usage.InputTokens + decoded.Usage.OutputTokens,
+		}
+	}
+
+	return response, nil
 }

@@ -8,6 +8,7 @@ const (
 	InvalidRequest ErrorKind = "invalid_request"
 	Transport      ErrorKind = "transport"
 	API            ErrorKind = "api"
+	Decode         ErrorKind = "decode"
 )
 
 type SDKError struct {

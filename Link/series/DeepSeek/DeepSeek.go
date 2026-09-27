@@ -3,22 +3,30 @@ package deepseek
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	sdkerror "github.com/nuka-del/nuka-llm/Error"
+	link "github.com/nuka-del/nuka-llm/Link"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
+	responseprotocol "github.com/nuka-del/nuka-llm/Protocol/Response_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
 type DeepSeek struct {
-	apiKey string
+	apiKey  string
+	options link.Options
 }
 
 func New(apiKey string) *DeepSeek {
+	return NewWithOptions(apiKey, link.DefaultOptions())
+}
+
+func NewWithOptions(apiKey string, options link.Options) *DeepSeek {
 	return &DeepSeek{
-		apiKey: apiKey,
+		apiKey:  apiKey,
+		options: options.WithDefaults(),
 	}
 }
 
@@ -136,12 +144,12 @@ func (d *DeepSeek) BuildRequest(
 	return jsonData, nil
 }
 
-func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+func (d *DeepSeek) ChatRaw(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline && d.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(
 			ctx,
-			time.Second*5,
+			d.options.Timeout,
 		)
 		defer cancel()
 	}
@@ -167,7 +175,7 @@ func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([
 	}
 	req = req.WithContext(ctx)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := d.options.HTTPClient.Do(req)
 	if err != nil {
 		return nil, &sdkerror.SDKError{
 			Provider: "deepseek",
@@ -201,4 +209,97 @@ func (d *DeepSeek) Chat(ctx context.Context, request requestprotocol.Request) ([
 
 	return result, nil
 
+}
+
+func (d *DeepSeek) DecodeResponse(raw []byte) (responseprotocol.Response, error) {
+	type chatCompletionResponse struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Index        int    `json:"index"`
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+
+	var decoded chatCompletionResponse
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.Decode,
+			Message:  "decode response failed",
+			Cause:    err,
+		}
+	}
+	if len(decoded.Choices) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.Decode,
+			Message:  "response contains no choices",
+		}
+	}
+
+	response := responseprotocol.Response{
+		Provider: "deepseek",
+		ID:       decoded.ID,
+		Model:    decoded.Model,
+		Choices:  make([]responseprotocol.Choice, len(decoded.Choices)),
+		Raw:      append(json.RawMessage(nil), raw...),
+	}
+	if decoded.Usage != nil {
+		response.Usage = &responseprotocol.Usage{
+			InputTokens:  decoded.Usage.PromptTokens,
+			OutputTokens: decoded.Usage.CompletionTokens,
+			TotalTokens:  decoded.Usage.TotalTokens,
+		}
+	}
+
+	for i, choice := range decoded.Choices {
+		message := responseprotocol.Message{
+			Role:    choice.Message.Role,
+			Content: choice.Message.Content,
+		}
+		for j, toolCall := range choice.Message.ToolCalls {
+			arguments := []byte(toolCall.Function.Arguments)
+			if len(arguments) > 0 && !json.Valid(arguments) {
+				return responseprotocol.Response{}, &sdkerror.SDKError{
+					Provider: "deepseek",
+					Kind:     sdkerror.Decode,
+					Message:  "decode tool call arguments failed",
+					Cause:    fmt.Errorf("choice %d tool call %d contains invalid JSON", i, j),
+				}
+			}
+			message.ToolCalls = append(message.ToolCalls, responseprotocol.ToolCall{
+				ID:   toolCall.ID,
+				Type: toolCall.Type,
+				Function: responseprotocol.FunctionCall{
+					Name:      toolCall.Function.Name,
+					Arguments: append(json.RawMessage(nil), arguments...),
+				},
+			})
+		}
+		response.Choices[i] = responseprotocol.Choice{
+			Index:        choice.Index,
+			Message:      message,
+			FinishReason: choice.FinishReason,
+		}
+	}
+
+	return response, nil
 }
