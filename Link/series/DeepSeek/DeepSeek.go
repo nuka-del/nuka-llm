@@ -48,9 +48,20 @@ func (d *DeepSeek) BuildRequest(
 			Message:  "at least one message is required",
 		}
 	}
+	type deepSeekToolCallFunction struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	type deepSeekToolCall struct {
+		ID       string                   `json:"id"`
+		Type     string                   `json:"type"`
+		Function deepSeekToolCallFunction `json:"function"`
+	}
 	type deepSeekMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role       string             `json:"role"`
+		Content    string             `json:"content"`
+		ToolCalls  []deepSeekToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string             `json:"tool_call_id,omitempty"`
 	}
 	type deepSeekProperty struct {
 		Type        string `json:"type"`
@@ -92,10 +103,32 @@ func (d *DeepSeek) BuildRequest(
 	}
 
 	for i, message := range req.Messages {
-		requestData.Messages[i] = deepSeekMessage{
-			Role:    message.Role,
-			Content: message.Content,
+		content, err := requestprotocol.ContentText(message.Content)
+		if err != nil {
+			return nil, &sdkerror.SDKError{
+				Provider: "deepseek",
+				Kind:     sdkerror.InvalidRequest,
+				Message:  "encode message content failed",
+				Cause:    err,
+			}
 		}
+
+		requestMessage := deepSeekMessage{
+			Role:       message.Role,
+			Content:    content,
+			ToolCallID: message.ToolCallID,
+		}
+		for _, toolCall := range message.ToolCalls {
+			requestMessage.ToolCalls = append(requestMessage.ToolCalls, deepSeekToolCall{
+				ID:   toolCall.ID,
+				Type: toolCall.Type,
+				Function: deepSeekToolCallFunction{
+					Name:      toolCall.Function.Name,
+					Arguments: string(toolCall.Function.Arguments),
+				},
+			})
+		}
+		requestData.Messages[i] = requestMessage
 	}
 
 	for i, inputTool := range req.Tools.ToolList {

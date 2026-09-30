@@ -65,11 +65,20 @@ func (c *Cluade) BuildRequest(
 
 	for _, message := range req.Messages {
 		if message.Role == "system" {
+			systemContent, err := requestprotocol.ContentText(message.Content)
+			if err != nil {
+				return nil, &sdkerror.SDKError{
+					Provider: "anthropic",
+					Kind:     sdkerror.InvalidRequest,
+					Message:  "encode system content failed",
+					Cause:    err,
+				}
+			}
 			if system != "" {
 				system += "\n"
 			}
 
-			system += message.Content
+			system += systemContent
 			continue
 		}
 
@@ -77,7 +86,16 @@ func (c *Cluade) BuildRequest(
 	}
 	type CluadeMessage struct {
 		Role    string `json:"role"`
-		Content string `json:"content"`
+		Content any    `json:"content"`
+	}
+	type CluadeContentBlock struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text,omitempty"`
+		ID        string          `json:"id,omitempty"`
+		Name      string          `json:"name,omitempty"`
+		Input     json.RawMessage `json:"input,omitempty"`
+		ToolUseID string          `json:"tool_use_id,omitempty"`
+		Content   string          `json:"content,omitempty"`
 	}
 	type CluadeProperty struct {
 		Type        string `json:"type"`
@@ -107,7 +125,7 @@ func (c *Cluade) BuildRequest(
 	}{
 		Model:       req.Model,
 		System:      system,
-		Messages:    make([]CluadeMessage, len(messages)),
+		Messages:    make([]CluadeMessage, 0, len(messages)),
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxTokens,
@@ -116,11 +134,90 @@ func (c *Cluade) BuildRequest(
 		Tools:       make([]CluadeTool, len(req.Tools.ToolList)),
 	}
 
-	for i, message := range messages {
-		requestData.Messages[i] = CluadeMessage{
-			Role:    message.Role,
-			Content: message.Content,
+	for i := 0; i < len(messages); {
+		message := messages[i]
+
+		if message.Role == "tool" {
+			contentBlocks := make([]CluadeContentBlock, 0)
+			for i < len(messages) && messages[i].Role == "tool" {
+				toolResult := messages[i]
+				if toolResult.ToolCallID == "" {
+					return nil, &sdkerror.SDKError{
+						Provider: "anthropic",
+						Kind:     sdkerror.InvalidRequest,
+						Message:  "tool result is missing tool_call_id",
+					}
+				}
+				content, err := requestprotocol.ContentText(toolResult.Content)
+				if err != nil {
+					return nil, &sdkerror.SDKError{
+						Provider: "anthropic",
+						Kind:     sdkerror.InvalidRequest,
+						Message:  "encode tool result failed",
+						Cause:    err,
+					}
+				}
+				contentBlocks = append(contentBlocks, CluadeContentBlock{
+					Type:      "tool_result",
+					ToolUseID: toolResult.ToolCallID,
+					Content:   content,
+				})
+				i++
+			}
+			requestData.Messages = append(requestData.Messages, CluadeMessage{
+				Role:    "user",
+				Content: contentBlocks,
+			})
+			continue
 		}
+
+		content, err := requestprotocol.ContentText(message.Content)
+		if err != nil {
+			return nil, &sdkerror.SDKError{
+				Provider: "anthropic",
+				Kind:     sdkerror.InvalidRequest,
+				Message:  "encode message content failed",
+				Cause:    err,
+			}
+		}
+
+		if len(message.ToolCalls) == 0 {
+			requestData.Messages = append(requestData.Messages, CluadeMessage{
+				Role:    message.Role,
+				Content: content,
+			})
+			i++
+			continue
+		}
+
+		if message.Role != "assistant" {
+			return nil, &sdkerror.SDKError{
+				Provider: "anthropic",
+				Kind:     sdkerror.InvalidRequest,
+				Message:  "tool calls must belong to an assistant message",
+			}
+		}
+
+		contentBlocks := make([]CluadeContentBlock, 0, len(message.ToolCalls)+1)
+		if content != "" {
+			contentBlocks = append(contentBlocks, CluadeContentBlock{
+				Type: "text",
+				Text: content,
+			})
+		}
+		for _, toolCall := range message.ToolCalls {
+			contentBlocks = append(contentBlocks, CluadeContentBlock{
+				Type:  "tool_use",
+				ID:    toolCall.ID,
+				Name:  toolCall.Function.Name,
+				Input: toolCall.Function.Arguments,
+			})
+		}
+		requestData.Messages = append(requestData.Messages, CluadeMessage{
+			Role:    "assistant",
+			Content: contentBlocks,
+		})
+		i++
 	}
 
 	for i, inputTool := range req.Tools.ToolList {

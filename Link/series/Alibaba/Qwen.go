@@ -47,9 +47,20 @@ func (d *Qwen) BuildRequest(
 			Message:  "at least one message is required",
 		}
 	}
+	type QwenToolCallFunction struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	type QwenToolCall struct {
+		ID       string               `json:"id"`
+		Type     string               `json:"type"`
+		Function QwenToolCallFunction `json:"function"`
+	}
 	type QwenMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role       string         `json:"role"`
+		Content    string         `json:"content"`
+		ToolCalls  []QwenToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string         `json:"tool_call_id,omitempty"`
 	}
 	type QwenProperty struct {
 		Type        string `json:"type"`
@@ -91,10 +102,32 @@ func (d *Qwen) BuildRequest(
 	}
 
 	for i, message := range req.Messages {
-		requestData.Messages[i] = QwenMessage{
-			Role:    message.Role,
-			Content: message.Content,
+		content, err := requestprotocol.ContentText(message.Content)
+		if err != nil {
+			return nil, &sdkerror.SDKError{
+				Provider: "qwen",
+				Kind:     sdkerror.InvalidRequest,
+				Message:  "encode message content failed",
+				Cause:    err,
+			}
 		}
+
+		requestMessage := QwenMessage{
+			Role:       message.Role,
+			Content:    content,
+			ToolCallID: message.ToolCallID,
+		}
+		for _, toolCall := range message.ToolCalls {
+			requestMessage.ToolCalls = append(requestMessage.ToolCalls, QwenToolCall{
+				ID:   toolCall.ID,
+				Type: toolCall.Type,
+				Function: QwenToolCallFunction{
+					Name:      toolCall.Function.Name,
+					Arguments: string(toolCall.Function.Arguments),
+				},
+			})
+		}
+		requestData.Messages[i] = requestMessage
 	}
 
 	for i, inputTool := range req.Tools.ToolList {

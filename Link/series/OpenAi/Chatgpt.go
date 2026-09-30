@@ -48,9 +48,20 @@ func (d *Chatgpt) BuildRequest(
 		}
 	}
 
+	type ChatgptToolFunction struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	type ChatgptToolCall struct {
+		ID       string              `json:"id"`
+		Type     string              `json:"type"`
+		Function ChatgptToolFunction `json:"function"`
+	}
 	type ChatgptMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role       string            `json:"role"`
+		Content    string            `json:"content"`
+		ToolCalls  []ChatgptToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string            `json:"tool_call_id,omitempty"`
 	}
 	type ChatgptProperty struct {
 		Type        string `json:"type"`
@@ -92,10 +103,32 @@ func (d *Chatgpt) BuildRequest(
 	}
 
 	for i, message := range req.Messages {
-		requestData.Messages[i] = ChatgptMessage{
-			Role:    message.Role,
-			Content: message.Content,
+		content, err := requestprotocol.ContentText(message.Content)
+		if err != nil {
+			return nil, &sdkerror.SDKError{
+				Provider: "openai",
+				Kind:     sdkerror.InvalidRequest,
+				Message:  "encode message content failed",
+				Cause:    err,
+			}
 		}
+
+		requestMessage := ChatgptMessage{
+			Role:       message.Role,
+			Content:    content,
+			ToolCallID: message.ToolCallID,
+		}
+		for _, toolCall := range message.ToolCalls {
+			requestMessage.ToolCalls = append(requestMessage.ToolCalls, ChatgptToolCall{
+				ID:   toolCall.ID,
+				Type: toolCall.Type,
+				Function: ChatgptToolFunction{
+					Name:      toolCall.Function.Name,
+					Arguments: string(toolCall.Function.Arguments),
+				},
+			})
+		}
+		requestData.Messages[i] = requestMessage
 	}
 
 	for i, inputTool := range req.Tools.ToolList {
