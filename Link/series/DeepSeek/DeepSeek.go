@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	link "github.com/nuka-del/nuka-llm/Link"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	responseprotocol "github.com/nuka-del/nuka-llm/Protocol/Response_Protocol"
+	toolprotocol "github.com/nuka-del/nuka-llm/Protocol/Tool_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
 type DeepSeek struct {
-	apiKey  string
-	options link.Options
+	apiKey       string
+	options      link.Options
+	toolRegistry *toolprotocol.ToolRegistry
 }
 
 func New(apiKey string) *DeepSeek {
@@ -25,9 +28,121 @@ func New(apiKey string) *DeepSeek {
 
 func NewWithOptions(apiKey string, options link.Options) *DeepSeek {
 	return &DeepSeek{
-		apiKey:  apiKey,
-		options: options.WithDefaults(),
+		apiKey:       apiKey,
+		options:      options.WithDefaults(),
+		toolRegistry: toolprotocol.NewToolRegistry(),
 	}
+}
+
+func (d *DeepSeek) RegisterTool(executor toolprotocol.ToolExecutor) error {
+	if d == nil || d.toolRegistry == nil {
+		return &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool registry is not initialized",
+		}
+	}
+	if err := d.toolRegistry.Register(executor); err != nil {
+		return &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "register tool failed",
+			Cause:    err,
+		}
+	}
+	return nil
+}
+
+func (d *DeepSeek) ChatWithToolResults(
+	ctx context.Context,
+	request *requestprotocol.Request,
+	firstResponse responseprotocol.Response,
+) (responseprotocol.Response, error) {
+	if d == nil || d.toolRegistry == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool registry is not initialized",
+		}
+	}
+	if ctx == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "context must not be nil",
+		}
+	}
+	if request == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "request must not be nil",
+		}
+	}
+	if strings.TrimSpace(d.apiKey) == "" {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "API key is required",
+		}
+	}
+	if d.options.HTTPClient == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "HTTP client is not initialized",
+		}
+	}
+	if len(firstResponse.Choices) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "first response contains no choices",
+		}
+	}
+
+	toolResponse := firstResponse
+	toolResponse.Choices = toolResponse.Choices[:1]
+	if err := d.toolRegistry.Dispatch(toolResponse); err != nil {
+		if toolErr, ok := err.(*sdkerror.SDKError); ok {
+			providerErr := *toolErr
+			providerErr.Provider = "deepseek"
+			return responseprotocol.Response{}, &providerErr
+		}
+		return responseprotocol.Response{}, err
+	}
+	results := d.toolRegistry.Results()
+	if len(results) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool dispatch returned no results",
+		}
+	}
+
+	assistantMessage := firstResponse.Choices[0].Message
+	request.Messages = append(request.Messages,
+		requestprotocol.Message{
+			Role:      assistantMessage.Role,
+			Content:   assistantMessage.Content,
+			ToolCalls: assistantMessage.ToolCalls,
+		},
+	)
+	for _, result := range results {
+		request.Messages = append(request.Messages,
+			requestprotocol.Message{
+				Role:       "tool",
+				ToolCallID: result.ToolCallID,
+				Content:    result.Content,
+			},
+		)
+	}
+
+	raw, err := d.ChatRaw(ctx, *request)
+	if err != nil {
+		return responseprotocol.Response{}, err
+	}
+	return d.DecodeResponse(raw)
 }
 
 func (d *DeepSeek) BuildRequest(
@@ -178,6 +293,34 @@ func (d *DeepSeek) BuildRequest(
 }
 
 func (d *DeepSeek) ChatRaw(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+	if d == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "provider is not initialized",
+		}
+	}
+	if ctx == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "context must not be nil",
+		}
+	}
+	if strings.TrimSpace(d.apiKey) == "" {
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "API key is required",
+		}
+	}
+	if d.options.HTTPClient == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "deepseek",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "HTTP client is not initialized",
+		}
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline && d.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(
@@ -333,6 +476,7 @@ func (d *DeepSeek) DecodeResponse(raw []byte) (responseprotocol.Response, error)
 			FinishReason: choice.FinishReason,
 		}
 	}
+	response.Message = response.Choices[0].Message
 
 	return response, nil
 }

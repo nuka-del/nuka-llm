@@ -5,13 +5,11 @@ import (
 	"time"
 )
 
-// Options configures the shared HTTP behavior for a provider.
 type Options struct {
 	HTTPClient *http.Client
 	Timeout    time.Duration
 }
 
-// DefaultOptions returns the current default HTTP client and request timeout.
 func DefaultOptions() Options {
 	return Options{
 		HTTPClient: http.DefaultClient,
@@ -19,7 +17,6 @@ func DefaultOptions() Options {
 	}
 }
 
-// WithDefaults fills values that were not provided by the caller.
 func (o Options) WithDefaults() Options {
 	if o.HTTPClient == nil {
 		o.HTTPClient = http.DefaultClient

@@ -9,6 +9,7 @@ const (
 	Transport      ErrorKind = "transport"
 	API            ErrorKind = "api"
 	Decode         ErrorKind = "decode"
+	ToolExecution  ErrorKind = "tool_execution"
 )
 
 type SDKError struct {

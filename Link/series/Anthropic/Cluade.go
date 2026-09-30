@@ -11,13 +11,15 @@ import (
 	link "github.com/nuka-del/nuka-llm/Link"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	responseprotocol "github.com/nuka-del/nuka-llm/Protocol/Response_Protocol"
+	toolprotocol "github.com/nuka-del/nuka-llm/Protocol/Tool_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
 type Cluade struct {
-	apiKey  string
-	version string
-	options link.Options
+	apiKey       string
+	version      string
+	options      link.Options
+	toolRegistry *toolprotocol.ToolRegistry
 }
 
 func (c *Cluade) ChangeVersion(v string) {
@@ -30,9 +32,121 @@ func New(Apikey string) *Cluade {
 
 func NewWithOptions(apiKey string, options link.Options) *Cluade {
 	return &Cluade{
-		apiKey:  apiKey,
-		options: options.WithDefaults(),
+		apiKey:       apiKey,
+		options:      options.WithDefaults(),
+		toolRegistry: toolprotocol.NewToolRegistry(),
 	}
+}
+
+func (c *Cluade) RegisterTool(executor toolprotocol.ToolExecutor) error {
+	if c == nil || c.toolRegistry == nil {
+		return &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool registry is not initialized",
+		}
+	}
+	if err := c.toolRegistry.Register(executor); err != nil {
+		return &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "register tool failed",
+			Cause:    err,
+		}
+	}
+	return nil
+}
+
+func (c *Cluade) ChatWithToolResults(
+	ctx context.Context,
+	request *requestprotocol.Request,
+	firstResponse responseprotocol.Response,
+) (responseprotocol.Response, error) {
+	if c == nil || c.toolRegistry == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool registry is not initialized",
+		}
+	}
+	if ctx == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "context must not be nil",
+		}
+	}
+	if request == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "request must not be nil",
+		}
+	}
+	if strings.TrimSpace(c.apiKey) == "" {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "API key is required",
+		}
+	}
+	if c.options.HTTPClient == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "HTTP client is not initialized",
+		}
+	}
+	if len(firstResponse.Choices) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "first response contains no choices",
+		}
+	}
+
+	toolResponse := firstResponse
+	toolResponse.Choices = toolResponse.Choices[:1]
+	if err := c.toolRegistry.Dispatch(toolResponse); err != nil {
+		if toolErr, ok := err.(*sdkerror.SDKError); ok {
+			providerErr := *toolErr
+			providerErr.Provider = "anthropic"
+			return responseprotocol.Response{}, &providerErr
+		}
+		return responseprotocol.Response{}, err
+	}
+	results := c.toolRegistry.Results()
+	if len(results) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool dispatch returned no results",
+		}
+	}
+
+	assistantMessage := firstResponse.Choices[0].Message
+	request.Messages = append(request.Messages,
+		requestprotocol.Message{
+			Role:      assistantMessage.Role,
+			Content:   assistantMessage.Content,
+			ToolCalls: assistantMessage.ToolCalls,
+		},
+	)
+	for _, result := range results {
+		request.Messages = append(request.Messages,
+			requestprotocol.Message{
+				Role:       "tool",
+				ToolCallID: result.ToolCallID,
+				Content:    result.Content,
+			},
+		)
+	}
+
+	raw, err := c.ChatRaw(ctx, *request)
+	if err != nil {
+		return responseprotocol.Response{}, err
+	}
+	return c.DecodeResponse(raw)
 }
 
 func (c *Cluade) BuildRequest(
@@ -271,6 +385,34 @@ func (c *Cluade) BuildRequest(
 	return jsonData, nil
 }
 func (c *Cluade) ChatRaw(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+	if c == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "provider is not initialized",
+		}
+	}
+	if ctx == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "context must not be nil",
+		}
+	}
+	if strings.TrimSpace(c.apiKey) == "" {
+		return nil, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "API key is required",
+		}
+	}
+	if c.options.HTTPClient == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "anthropic",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "HTTP client is not initialized",
+		}
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline && c.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(
@@ -395,6 +537,7 @@ func (c *Cluade) DecodeResponse(raw []byte) (responseprotocol.Response, error) {
 		Provider: "anthropic",
 		ID:       decoded.ID,
 		Model:    decoded.Model,
+		Message:  message,
 		Choices: []responseprotocol.Choice{
 			{
 				Index:        0,

@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	sdkerror "github.com/nuka-del/nuka-llm/Error"
 	link "github.com/nuka-del/nuka-llm/Link"
 	requestprotocol "github.com/nuka-del/nuka-llm/Protocol/Request_Protocol"
 	responseprotocol "github.com/nuka-del/nuka-llm/Protocol/Response_Protocol"
+	toolprotocol "github.com/nuka-del/nuka-llm/Protocol/Tool_Protocol"
 	tool "github.com/nuka-del/nuka-llm/Tool"
 )
 
 type Qwen struct {
-	apiKey  string
-	options link.Options
+	apiKey       string
+	options      link.Options
+	toolRegistry *toolprotocol.ToolRegistry
 }
 
 func New(Apikey string) *Qwen {
@@ -25,9 +28,121 @@ func New(Apikey string) *Qwen {
 
 func NewWithOptions(apiKey string, options link.Options) *Qwen {
 	return &Qwen{
-		apiKey:  apiKey,
-		options: options.WithDefaults(),
+		apiKey:       apiKey,
+		options:      options.WithDefaults(),
+		toolRegistry: toolprotocol.NewToolRegistry(),
 	}
+}
+
+func (q *Qwen) RegisterTool(executor toolprotocol.ToolExecutor) error {
+	if q == nil || q.toolRegistry == nil {
+		return &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool registry is not initialized",
+		}
+	}
+	if err := q.toolRegistry.Register(executor); err != nil {
+		return &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "register tool failed",
+			Cause:    err,
+		}
+	}
+	return nil
+}
+
+func (q *Qwen) ChatWithToolResults(
+	ctx context.Context,
+	request *requestprotocol.Request,
+	firstResponse responseprotocol.Response,
+) (responseprotocol.Response, error) {
+	if q == nil || q.toolRegistry == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool registry is not initialized",
+		}
+	}
+	if ctx == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "context must not be nil",
+		}
+	}
+	if request == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "request must not be nil",
+		}
+	}
+	if strings.TrimSpace(q.apiKey) == "" {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "API key is required",
+		}
+	}
+	if q.options.HTTPClient == nil {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "HTTP client is not initialized",
+		}
+	}
+	if len(firstResponse.Choices) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "first response contains no choices",
+		}
+	}
+
+	toolResponse := firstResponse
+	toolResponse.Choices = toolResponse.Choices[:1]
+	if err := q.toolRegistry.Dispatch(toolResponse); err != nil {
+		if toolErr, ok := err.(*sdkerror.SDKError); ok {
+			providerErr := *toolErr
+			providerErr.Provider = "qwen"
+			return responseprotocol.Response{}, &providerErr
+		}
+		return responseprotocol.Response{}, err
+	}
+	results := q.toolRegistry.Results()
+	if len(results) == 0 {
+		return responseprotocol.Response{}, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "tool dispatch returned no results",
+		}
+	}
+
+	assistantMessage := firstResponse.Choices[0].Message
+	request.Messages = append(request.Messages,
+		requestprotocol.Message{
+			Role:      assistantMessage.Role,
+			Content:   assistantMessage.Content,
+			ToolCalls: assistantMessage.ToolCalls,
+		},
+	)
+	for _, result := range results {
+		request.Messages = append(request.Messages,
+			requestprotocol.Message{
+				Role:       "tool",
+				ToolCallID: result.ToolCallID,
+				Content:    result.Content,
+			},
+		)
+	}
+
+	raw, err := q.ChatRaw(ctx, *request)
+	if err != nil {
+		return responseprotocol.Response{}, err
+	}
+	return q.DecodeResponse(raw)
 }
 
 func (d *Qwen) BuildRequest(
@@ -176,6 +291,34 @@ func (d *Qwen) BuildRequest(
 	return jsonData, nil
 }
 func (q *Qwen) ChatRaw(ctx context.Context, request requestprotocol.Request) ([]byte, error) {
+	if q == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "provider is not initialized",
+		}
+	}
+	if ctx == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "context must not be nil",
+		}
+	}
+	if strings.TrimSpace(q.apiKey) == "" {
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "API key is required",
+		}
+	}
+	if q.options.HTTPClient == nil {
+		return nil, &sdkerror.SDKError{
+			Provider: "qwen",
+			Kind:     sdkerror.InvalidRequest,
+			Message:  "HTTP client is not initialized",
+		}
+	}
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline && q.options.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(
@@ -190,7 +333,7 @@ func (q *Qwen) ChatRaw(ctx context.Context, request requestprotocol.Request) ([]
 	}
 	factory := &tool.HttpFactory{}
 	factory.Set(
-		"https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+		"https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
 		q.apiKey,
 	)
 
@@ -331,6 +474,7 @@ func (q *Qwen) DecodeResponse(raw []byte) (responseprotocol.Response, error) {
 			FinishReason: choice.FinishReason,
 		}
 	}
+	response.Message = response.Choices[0].Message
 
 	return response, nil
 }
