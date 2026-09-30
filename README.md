@@ -1,5 +1,7 @@
 # nuka-llm
 
+简体中文 | [English](README_EN.md) | [日本語](README_JA.md)
+
 `nuka-llm` 是一个 Go 多模型聊天 SDK。它为多个模型服务商提供统一的请求、响应和工具调用接口，同时保留各 provider 自己的 HTTP endpoint 与 JSON 映射。
 
 ## 功能
