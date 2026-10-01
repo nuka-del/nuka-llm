@@ -2,17 +2,36 @@
 
 [English](README_EN.md) | [简体中文](README.md) | [日本語](README_JA.md)
 
-`nuka-llm` is a Go SDK for chat models from multiple providers. It offers a unified request, response, and tool-calling API while keeping each provider's HTTP endpoint and JSON mapping.
+`nuka-llm` is a Go multi-provider LLM Agent SDK. Regular chat is the basic model interaction; its core workflow dispatches model-generated tool calls to registered application tools, returns their results to the model, and repeats until a final answer is produced.
 
 ## Features
 
-- A unified synchronous chat API and response type.
 - Multiple providers: DeepSeek, OpenAI, Alibaba Cloud Bailian Qwen, Zhipu GLM, Moonshot Kimi, and Anthropic Claude.
-- Regular chat and automatic multi-round tool calling.
-- Tool registration, argument passing, tool-call ID correlation, and execution errors.
+- A tool registry that routes model-generated `tool_calls` to application-provided executors.
+- Automatic tool execution, tool-call ID correlation, result handoff, and multi-round orchestration.
 - Per-round token usage and aggregated usage across tool-calling rounds.
-- Builder methods for requests, messages, and function tools.
+- A unified synchronous chat API, response type, and builder methods for requests, messages, and function tools.
 - Configurable HTTP client, request timeout, and Client context.
+
+## Core workflow
+
+```text
+User prompt + tool definitions
+            ↓
+Client.ChatWithTools → provider builds its request format
+            ↓
+Model returns tool_calls
+            ↓
+ToolRegistry finds each executor by function name and passes Arguments
+            ↓
+Execute tools and collect ToolResult values
+            ↓
+Provider appends assistant/tool messages and calls the model again
+            ↓
+Repeat until the model returns a final answer
+```
+
+Tools represent capabilities supplied by the application, such as querying weather, accessing a database, calling internal services, or running workflows. The SDK orchestrates the model/tool loop; the application implements the actual tool logic.
 
 ## Installation
 
@@ -38,7 +57,7 @@ Pass one of the following provider selectors to `client.New` or `client.NewWithO
 Use an Alibaba Cloud Bailian API key with the `qwen` selector for Bailian-hosted `kimi-k2.6` or `glm-5`. The `kimi` and `glm` selectors connect to the Moonshot AI and Zhipu AI endpoints and require API keys for those services. The Anthropic selector is spelled `cluade` in the current Client API.
 Anthropic requests must set `Request.MaxTokens`.
 
-## Quick start: regular chat
+## Basic capability: regular chat
 
 ```go
 package main

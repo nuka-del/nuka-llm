@@ -2,17 +2,36 @@
 
 简体中文 | [English](README_EN.md) | [日本語](README_JA.md)
 
-`nuka-llm` 是一个 Go 多模型聊天 SDK。它为多个模型服务商提供统一的请求、响应和工具调用接口，同时保留各 provider 自己的 HTTP endpoint 与 JSON 映射。
+`nuka-llm` 是一个 Go 多 Provider 大模型 Agent SDK。普通聊天是模型交互的基础入口；项目的核心是把模型返回的工具调用分发给用户注册的工具、执行后将结果交回模型，并自动完成多轮调用直到模型给出最终回答。
 
 ## 功能
 
-- 统一的同步聊天接口和响应结构。
-- 多 provider 支持：DeepSeek、OpenAI、阿里云百炼 Qwen、智谱 GLM、Moonshot Kimi 和 Anthropic Claude。
-- 普通聊天和自动多轮工具调用。
-- 工具注册、参数传递、工具结果关联及执行错误处理。
-- 逐轮 token 用量和多轮累计用量。
-- 简化的 Request、Message 和 Function Tool 构造方法。
+- 多 provider 模型接入：DeepSeek、OpenAI、阿里云百炼 Qwen、智谱 GLM、Moonshot Kimi 和 Anthropic Claude。
+- 基于工具注册表，将模型的 `tool_calls` 路由到用户实现的工具。
+- 自动执行工具、关联工具调用 ID、回传结果，并循环请求模型直到获得最终回答。
+- 逐轮 token 用量记录和多轮总用量汇总。
+- 统一的同步聊天接口、响应结构和简化的 Request/Function Tool 构造方法。
 - 可配置 HTTP client、请求超时和 Client context。
+
+## 核心工作流
+
+```text
+用户问题 + 工具定义
+        ↓
+Client.ChatWithTools → provider 按厂商格式构造请求
+        ↓
+大模型返回 tool_calls
+        ↓
+ToolRegistry 按函数名查找 executor，并传入 Arguments
+        ↓
+执行工具，取得 ToolResult
+        ↓
+provider 按厂商格式追加 assistant/tool 消息，再次请求大模型
+        ↓
+继续处理新的 tool_calls，直到模型返回最终回答
+```
+
+工具代表应用可以提供给模型的实际能力，例如查天气、查询数据库、调用内部服务或执行工作流。SDK 负责模型与工具之间的多轮调度；具体工具逻辑由应用实现。
 
 ## 安装
 
@@ -38,7 +57,7 @@ go get github.com/nuka-del/nuka-llm
 通过 `qwen` 使用 `kimi-k2.6` 或 `glm-5` 时，请使用阿里云百炼的 API key。`kimi` 和 `glm` 则连接 Moonshot AI 与智谱 AI 各自的 endpoint，需要对应服务商的 API key。
 Anthropic 请求需要设置 `Request.MaxTokens`。
 
-## 快速开始：普通聊天
+## 基础功能：普通模型对话
 
 ```go
 package main
@@ -213,7 +232,7 @@ if err := sdk.RegisterTool(WeatherTool{}); err != nil {
 }
 ```
 
-## 自动多轮工具调用
+## 核心功能：通过工具完成多轮任务
 
 在 Request 中声明工具 schema，并向 Client 注册同名的 executor。`ChatWithTools` 会发送首轮请求、运行模型请求的工具、把结果关联到 tool call ID，再继续请求，直到模型返回普通回答。
 

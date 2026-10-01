@@ -2,17 +2,36 @@
 
 [日本語](README_JA.md) | [简体中文](README.md) | [English](README_EN.md)
 
-`nuka-llm` は、複数のモデルプロバイダーを統一されたリクエスト、レスポンス、ツール呼び出し API で利用するための Go SDK です。各プロバイダー固有の HTTP endpoint と JSON マッピングも維持します。
+`nuka-llm` は Go 製のマルチプロバイダー LLM Agent SDK です。通常のチャットはモデルとやり取りするための基本機能です。中心となるのは、モデルが返したツール呼び出しを登録済みのアプリケーションツールに振り分け、実行結果をモデルに返し、最終回答が得られるまで繰り返すワークフローです。
 
 ## 機能
 
-- 同期チャット API と統一レスポンス構造。
 - DeepSeek、OpenAI、Alibaba Cloud Bailian Qwen、Zhipu GLM、Moonshot Kimi、Anthropic Claude に対応。
-- 通常のチャットと自動マルチターン・ツール呼び出し。
-- ツール登録、引数の受け渡し、tool call ID の対応付け、実行エラー処理。
+- モデルが返す `tool_calls` を、関数名に基づいてアプリケーション側の executor に振り分けるツール registry。
+- ツールの自動実行、tool call ID の対応付け、結果の受け渡し、マルチターン処理。
 - ターンごとの token 使用量と、ツール会話全体の累計使用量。
-- Request、Message、Function Tool の簡易コンストラクター。
+- 同期チャット API、統一レスポンス構造、Request/Message/Function Tool の簡易コンストラクター。
 - HTTP client、リクエスト timeout、Client context の設定。
+
+## 中心となるワークフロー
+
+```text
+ユーザーの質問 + ツール定義
+              ↓
+Client.ChatWithTools → provider が各社形式のリクエストを構築
+              ↓
+モデルが tool_calls を返す
+              ↓
+ToolRegistry が関数名で executor を検索し、Arguments を渡す
+              ↓
+ツールを実行して ToolResult を取得
+              ↓
+provider が assistant/tool メッセージを追加して再度モデルを呼び出す
+              ↓
+モデルが最終回答を返すまで繰り返す
+```
+
+ツールは、天気の検索、データベース照会、内部サービス呼び出し、ワークフロー実行など、アプリケーションがモデルに提供する実際の機能です。SDK はモデルとツールの呼び出しを調整し、具体的なツール処理はアプリケーション側で実装します。
 
 ## インストール
 
@@ -38,7 +57,7 @@ go get github.com/nuka-del/nuka-llm
 Bailian が提供する `kimi-k2.6` または `glm-5` を使う場合は、Alibaba Cloud Bailian の API key と `qwen` selector を使用してください。`kimi` と `glm` selector は、それぞれ Moonshot AI と Zhipu AI の endpoint に接続し、各サービスの API key が必要です。現在の Client API では、Anthropic の selector は `cluade` です。
 Anthropic を使用する場合、Request に `MaxTokens` を設定する必要があります。
 
-## クイックスタート：通常のチャット
+## 基本機能：通常のチャット
 
 ```go
 package main
